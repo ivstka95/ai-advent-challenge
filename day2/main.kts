@@ -57,6 +57,46 @@ fun extractFirstTextField(json: String): String? {
 
 val client = HttpClient.newHttpClient()
 
+fun prettyJson(json: String): String {
+    val sb = StringBuilder()
+    var indent = 0
+    var inString = false
+    var i = 0
+    while (i < json.length) {
+        val c = json[i]
+        when {
+            inString -> {
+                sb.append(c)
+                if (c == '\\' && i + 1 < json.length) { i++; sb.append(json[i]) }
+                else if (c == '"') inString = false
+            }
+            c == '"' -> { sb.append(c); inString = true }
+            c == '{' || c == '[' -> {
+                sb.append(c); indent++
+                val next = json.drop(i + 1).trimStart().firstOrNull()
+                if (next != null && next != '}' && next != ']')
+                    sb.append('\n').append("  ".repeat(indent))
+            }
+            c == '}' || c == ']' -> { indent--; sb.append('\n').append("  ".repeat(indent)).append(c) }
+            c == ',' -> sb.append(',').append('\n').append("  ".repeat(indent))
+            c == ':' -> sb.append(": ")
+            c == ' ' || c == '\n' || c == '\r' || c == '\t' -> Unit
+            else -> sb.append(c)
+        }
+        i++
+    }
+    return sb.toString()
+}
+
+fun logNet(label: String, headers: Map<String, List<String>>, body: String) {
+    System.err.println("\n── $label ──────────────────────────────────")
+    headers.filter { (k, _) -> !k.equals("x-api-key", ignoreCase = true) }
+           .forEach { (k, vs) -> System.err.println("  $k: ${vs.joinToString(", ")}") }
+    System.err.println()
+    System.err.println(if (body.trimStart().firstOrNull() in listOf('{', '[')) prettyJson(body) else body)
+    System.err.println("────────────────────────────────────────────\n")
+}
+
 // Send the full conversation history with each request — the API has no memory of its own.
 fun sendHistory(history: List<Pair<String, String>>): String? {
     val msgs = history.joinToString(",") { (role, content) ->
@@ -70,11 +110,15 @@ fun sendHistory(history: List<Pair<String, String>>): String? {
         .header("content-type", "application/json")
         .POST(HttpRequest.BodyPublishers.ofString(body))
         .build()
+
+    logNet("REQUEST  POST ${req.uri()}", req.headers().map(), body)
+
     val resp = client.send(req, HttpResponse.BodyHandlers.ofString())
+    logNet("RESPONSE ${resp.statusCode()}", resp.headers().map(), resp.body())
+
     return if (resp.statusCode() == 200) {
         extractFirstTextField(resp.body())
     } else {
-        System.err.println("HTTP ${resp.statusCode()}: ${resp.body()}")
         null
     }
 }
@@ -98,7 +142,7 @@ while (true) {
     history += "user" to input
 
     try {
-        val reply = sendHistory(history)
+        val reply = sendHistory(listOf("user" to input))
         if (reply != null) {
             history += "assistant" to reply
             println("\nClaude: $reply\n")
